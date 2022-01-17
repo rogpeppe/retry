@@ -9,7 +9,7 @@ import (
 
 type Foo struct{}
 
-func ExampleRetryGet() {
+func ExampleStrategy() {
 	getFoo()
 }
 
