@@ -1,4 +1,4 @@
-// Package retry implements an efficientloop-based retry mechanism
+// Package retry implements an efficient loop-based retry mechanism
 // that allows the retry policy to be specified independently of the control structure.
 // It supports exponential (with jitter) and linear retry policies.
 //
