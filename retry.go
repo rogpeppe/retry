@@ -5,22 +5,6 @@
 // Although syntactically lightweight, it's also flexible - for example,
 // it can be used to run a backoff loop while waiting for other concurrent
 // events, or with mocked-out time.
-//
-// An example:
-//
-//	func getFoo() (*Foo, error) {
-//		var retryStrategy retry.Strategy{
-//			MinDelay: time.Millisecond,
-//			MaxDelay: time.Second,
-//			MaxDuration: time.Minute,
-//		}
-//		for i := retryStrategy.Start(nil); i.Next(); {
-//			if foo, err := doSomething(); err == nil {
-//				return foo, nil
-//			}
-//		}
-//		return foo, fmt.Errorf("too many retries")
-//	}
 package retry
 
 import (
