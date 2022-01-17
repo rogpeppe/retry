@@ -74,7 +74,7 @@ type Strategy struct {
 //
 // The grammar is:
 //
-// 	[ "~" ] minDelay [ [ "**" factor ] ".." maxDelay ] [ ";" [ maxCount ] [ ";" [ maxDuration ] ]
+// 	[ "~" ] minDelay [ [ "**" factor ] ".." maxDelay ] [ "; " [ maxCount ] [ "; " [ maxDuration ] ]
 //
 // TODO implement ParseStrategy to parse the above grammar.
 func (s *Strategy) String() string {
