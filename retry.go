@@ -10,6 +10,8 @@ package retry
 import (
 	"math"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,6 +51,12 @@ type Strategy struct {
 	// https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
 	Factor float64
 
+	// Regular specifies that the backoff timing should be adhered
+	// to as closely as possible with no jitter. When this is false,
+	// the actual delay between attempts will be chosen randomly
+	// from the interval (0, d] where d is the delay for that iteration.
+	Regular bool
+
 	// MaxCount limits the total number of attempts that will be made. If it's zero,
 	// the number of attempts is unlimited.
 	MaxCount int
@@ -60,12 +68,45 @@ type Strategy struct {
 	MaxDuration time.Duration
 }
 
-// jitter is used by tests to disable jitter.
-var jitter = true
-
-// TODO implement ParseStrategy to parse a string like:
-// 	1ms..30s*2; 20; 2m
-// minDelay [ ".." maxDelay [ "*" factor] ] [ ";" [ maxCount ] [ ";" [ maxDuration ] ]
+// String returns the strategy in the format:
+//
+// 	~1ms**1.5..30s; 20; 2m
+//
+// The grammar is:
+//
+// 	[ "~" ] minDelay [ [ "**" factor ] ".." maxDelay ] [ ";" [ maxCount ] [ ";" [ maxDuration ] ]
+//
+// TODO implement ParseStrategy to parse the above grammar.
+func (s *Strategy) String() string {
+	var buf strings.Builder
+	if !s.Regular {
+		buf.WriteByte('~')
+	}
+	buf.WriteString(s.Delay.String())
+	if s.MaxDelay > s.Delay {
+		factor := s.Factor
+		if factor <= 1 {
+			factor = 2
+		}
+		if factor != 2 {
+			buf.WriteString("**")
+			buf.WriteString(strconv.FormatFloat(factor, 'g', -1, 64))
+		}
+		buf.WriteString("..")
+		buf.WriteString(s.MaxDelay.String())
+	}
+	if s.MaxCount > 0 || s.MaxDuration > 0 {
+		buf.WriteString("; ")
+		if s.MaxCount > 0 {
+			buf.WriteString(strconv.FormatInt(int64(s.MaxCount), 10))
+		}
+		if s.MaxDuration > 0 {
+			buf.WriteString("; ")
+			buf.WriteString(s.MaxDuration.String())
+		}
+	}
+	return buf.String()
+}
 
 // Start starts a set of retry attempts using s as
 // a retry strategy and returns an Iter
@@ -191,19 +232,20 @@ func (i *Iter) updateNext() bool {
 	if i.count >= i.strategy.MaxCount {
 		return false
 	}
+	var actualDelay time.Duration
 	if !i.strategy.isExponential() {
-		i.tryStart = i.tryStart.Add(i.strategy.Delay)
+		actualDelay = i.strategy.Delay
 	} else {
-		actualDelay := i.delay
-		if jitter {
-			actualDelay = randDuration(actualDelay)
-		}
-		i.tryStart = i.tryStart.Add(actualDelay)
+		actualDelay = i.delay
 		i.delay = time.Duration(float64(i.delay) * i.strategy.Factor)
 		if i.delay > i.strategy.MaxDelay {
 			i.delay = i.strategy.MaxDelay
 		}
 	}
+	if !i.strategy.Regular {
+		actualDelay = randDuration(actualDelay)
+	}
+	i.tryStart = i.tryStart.Add(actualDelay)
 	now := i.now()
 	if i.tryStart.Before(now) {
 		i.tryStart = now

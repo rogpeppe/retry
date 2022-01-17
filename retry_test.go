@@ -13,6 +13,7 @@ func TestIterTiming(t *testing.T) {
 	testIter := Strategy{
 		Delay:       0.1e9,
 		MaxDuration: 0.25e9,
+		Regular:     true,
 	}
 	want := []time.Duration{0, 0.1e9, 0.2e9, 0.2e9}
 	got := make([]time.Duration, 0, len(want)) // avoid allocation when testing timing
@@ -171,10 +172,9 @@ func TestStrategies(t *testing.T) {
 	c := qt.New(t)
 	for _, test := range strategyTests {
 		c.Run(test.testName, func(c *qt.C) {
-			noJitter(t)
 			t0 := time.Now()
 			now := t0
-
+			test.strategy.Regular = true
 			var i Iter
 			i.Start(&test.strategy, nil, func() time.Time {
 				return now
@@ -274,19 +274,104 @@ func TestExponentialWithJitter(t *testing.T) {
 	}
 }
 
+var strategyStringTests = []struct {
+	testName string
+	s        Strategy
+	want     string
+}{{
+	testName: "AllFields",
+	s: Strategy{
+		Delay:       time.Millisecond,
+		MaxDelay:    30 * time.Second,
+		Factor:      1.5,
+		MaxCount:    20,
+		MaxDuration: 2 * time.Minute,
+	},
+	want: "~1ms**1.5..30s; 20; 2m0s",
+}, {
+	testName: "AllFieldsRegular",
+	s: Strategy{
+		Regular:     true,
+		Delay:       time.Millisecond,
+		MaxDelay:    30 * time.Second,
+		Factor:      1.5,
+		MaxCount:    20,
+		MaxDuration: 2 * time.Minute,
+	},
+	want: "1ms**1.5..30s; 20; 2m0s",
+}, {
+	testName: "NoMaxCount",
+	s: Strategy{
+		Regular:     true,
+		Delay:       time.Millisecond,
+		MaxDelay:    30 * time.Second,
+		Factor:      1.5,
+		MaxDuration: 2 * time.Minute,
+	},
+	want: "1ms**1.5..30s; ; 2m0s",
+}, {
+	testName: "NoMaxDuration",
+	s: Strategy{
+		Regular:  true,
+		Delay:    time.Millisecond,
+		MaxDelay: 30 * time.Second,
+		Factor:   1.5,
+		MaxCount: 20,
+	},
+	want: "1ms**1.5..30s; 20",
+}, {
+	testName: "NoMax",
+	s: Strategy{
+		Regular:  true,
+		Delay:    time.Millisecond,
+		MaxDelay: 30 * time.Second,
+		Factor:   1.5,
+	},
+	want: "1ms**1.5..30s",
+}, {
+	testName: "DefaultFactor",
+	s: Strategy{
+		Delay:    time.Millisecond,
+		MaxDelay: 30 * time.Second,
+	},
+	want: "~1ms..30s",
+}, {
+	testName: "Factor2",
+	s: Strategy{
+		Delay:    time.Millisecond,
+		MaxDelay: 30 * time.Second,
+	},
+	want: "~1ms..30s",
+}, {
+	testName: "NonExponential",
+	s: Strategy{
+		Delay: time.Millisecond,
+	},
+	want: "~1ms",
+}, {
+	testName: "NonExponentialRegular",
+	s: Strategy{
+		Delay:   time.Millisecond,
+		Regular: true,
+	},
+	want: "1ms",
+}}
+
+func TestStrategyString(t *testing.T) {
+	c := qt.New(t)
+	for _, test := range strategyStringTests {
+		c.Run(test.testName, func(c *qt.C) {
+			c.Assert(test.s.String(), qt.Equals, test.want)
+		})
+	}
+}
+
 func assertReceive(c *qt.C, ch <-chan struct{}, what string) {
 	select {
 	case <-ch:
 	case <-time.After(time.Second):
 		c.Fatalf("timed out waiting for %s", what)
 	}
-}
-
-func noJitter(t testing.TB) {
-	jitter = false
-	t.Cleanup(func() {
-		jitter = true
-	})
 }
 
 func BenchmarkReuseIter(b *testing.B) {
