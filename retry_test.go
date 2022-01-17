@@ -176,7 +176,7 @@ func TestStrategies(t *testing.T) {
 			now := t0
 			test.strategy.Regular = true
 			var i Iter
-			i.Start(&test.strategy, nil, func() time.Time {
+			i.Reset(&test.strategy, nil, func() time.Time {
 				return now
 			})
 			for j, call := range test.calls {
@@ -236,7 +236,7 @@ func TestExponentialWithJitter(t *testing.T) {
 	var i int
 	for i = 0; i < 10000; i++ {
 		var i Iter
-		i.Start(&strategy, nil, func() time.Time {
+		i.Reset(&strategy, nil, func() time.Time {
 			return now
 		})
 		t, ok := i.NextTime()
@@ -382,7 +382,7 @@ func BenchmarkReuseIter(b *testing.B) {
 	b.ReportAllocs()
 	var i Iter
 	for j := 0; j < b.N; j++ {
-		for i.Start(&strategy, nil, nil); i.Next(); {
+		for i.Reset(&strategy, nil, nil); i.Next(); {
 		}
 	}
 }
@@ -408,7 +408,7 @@ func BenchmarkReuseIterWithStop(b *testing.B) {
 	c := make(chan struct{})
 	var i Iter
 	for j := 0; j < b.N; j++ {
-		for i.Start(&strategy, c, nil); i.Next(); {
+		for i.Reset(&strategy, c, nil); i.Next(); {
 		}
 	}
 }
@@ -437,7 +437,7 @@ func BenchmarkReuseWithStop(b *testing.B) {
 
 	for j := 0; j < b.N; j++ {
 		j := 0
-		for i.Start(&strategy, c, nil); i.Next(); {
+		for i.Reset(&strategy, c, nil); i.Next(); {
 			j++
 		}
 		if j != 5 {

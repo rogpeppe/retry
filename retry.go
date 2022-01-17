@@ -116,7 +116,7 @@ func (s *Strategy) String() string {
 // sets of retries (but not concurrently).
 func (s *Strategy) Start(stop <-chan struct{}) *Iter {
 	var a Iter
-	a.Start(s, stop, nil)
+	a.Reset(s, stop, nil)
 	return &a
 }
 
@@ -144,12 +144,15 @@ type Iter struct {
 	timer *time.Timer
 }
 
-// Start is like Strategy.Start but initializes an existing Iter
-// value which can save an allocation.
+// Reset is like Strategy.Start but initializes an existing Iter
+// value which can save the allocation of the underlying
+// time.Timer used when the stop channel is non-nil.
 //
 // It also accepts a function that is used to get the current time.
 // If that's nil, time.Now will be used.
-func (i *Iter) Start(strategy *Strategy, stop <-chan struct{}, now func() time.Time) {
+//
+// It's OK to call this on the zero Iter value.
+func (i *Iter) Reset(strategy *Strategy, stop <-chan struct{}, now func() time.Time) {
 	i.strategy = *strategy
 	if i.strategy.isExponential() {
 		if i.strategy.Factor <= 1 {
