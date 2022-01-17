@@ -33,17 +33,24 @@ import (
 // Strategy represents a retry strategy. This specifies how a set of retries should
 // be made and can be reused for any number of attempts (it's treated as immutable
 // by this package).
+//
+// If an iteration takes longer than the delay for that iteration, the next
+// iteration will be moved accordingly. For example, if the strategy
+// has a delay of 1ms and the first two tries take 1s and 0.5ms respectively,
+// then the second try will start immediately after the first (at 1s), but
+// the third will start at 1.1s.
 type Strategy struct {
-	// Delay holds the amount of time between starting each retry attempt.
-	// If Factor is greater than 1 or MaxDelay is greater than Delay,
-	// then the delay time will increase exponentially (modulo jitter) as attempts continue,
-	// up to a maximum of MaxDuration if that's non-zero.
+	// Delay holds the amount of time between starting each retry
+	// attempt. If Factor is greater than 1 or MaxDelay is greater
+	// than Delay, then the maximum delay time will increase
+	// exponentially (modulo jitter) as attempts continue, up to a
+	// maximum of MaxDuration if that's non-zero.
 	Delay time.Duration
 
 	// MaxDelay holds the maximum amount of time between
 	// starting each retry attempt. If this is greater than Delay,
 	// the strategy is exponential - the time between attempts
-	// will multiply by Factor on each attempt (but see NoJitter).
+	// will multiply by Factor on each attempt.
 	MaxDelay time.Duration
 
 	// Factor holds the exponential factor used when calculating the
@@ -213,8 +220,11 @@ func (i *Iter) updateNext() bool {
 			i.delay = i.strategy.MaxDelay
 		}
 	}
+	now := i.now()
+	if i.tryStart.Before(now) {
+		i.tryStart = now
+	}
 	if i.strategy.MaxDuration != 0 {
-		now := i.now()
 		if now.Sub(i.start) > i.strategy.MaxDuration || i.tryStart.Sub(i.start) > i.strategy.MaxDuration {
 			return false
 		}

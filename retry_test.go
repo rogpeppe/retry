@@ -108,9 +108,8 @@ var strategyTests = []strategyTest{{
 		// so we get i zero delay, but subsequent events
 		// resume pace.
 		{2e9, 0},
-		{2.1e9, 0},
+		{2.1e9, 0.9e9},
 		{3e9, 0},
-		{4e9, 0},
 	},
 	terminates: true,
 }, {
@@ -186,7 +185,7 @@ func TestStrategies(t *testing.T) {
 				expectTerminate := test.terminates && j == len(test.calls)-1
 				c.Assert(ok, qt.Equals, !expectTerminate)
 				if ok {
-					c.Logf("call %d at %v - got %v want %v", j, now.Sub(t0), nextt.Sub(t0), call.t)
+					c.Logf("call %d at %v - got %v want %v", j, now.Sub(t0), nextt.Sub(now), call.sleep)
 					if nextt.After(now) {
 						now = nextt
 					}
