@@ -8,21 +8,21 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-func TestAttemptTiming(t *testing.T) {
+func TestIterTiming(t *testing.T) {
 	c := qt.New(t)
-	testAttempt := Strategy{
+	testIter := Strategy{
 		Delay:       0.1e9,
 		MaxDuration: 0.25e9,
 	}
 	want := []time.Duration{0, 0.1e9, 0.2e9, 0.2e9}
 	got := make([]time.Duration, 0, len(want)) // avoid allocation when testing timing
 	t0 := time.Now()
-	a := testAttempt.Start(nil)
-	for a.Next() {
+	i := testIter.Start(nil)
+	for i.Next() {
 		got = append(got, time.Now().Sub(t0))
 	}
 	got = append(got, time.Now().Sub(t0))
-	c.Assert(a.WasStopped(), qt.Equals, false)
+	c.Assert(i.WasStopped(), qt.Equals, false)
 	c.Assert(got, qt.HasLen, len(want))
 	const margin = 0.01e9
 	for i, got := range want {
@@ -34,7 +34,7 @@ func TestAttemptTiming(t *testing.T) {
 	}
 }
 
-func TestAttemptWithStop(t *testing.T) {
+func TestIterWithStop(t *testing.T) {
 	c := qt.New(t)
 	stop := make(chan struct{})
 	close(stop)
@@ -44,11 +44,11 @@ func TestAttemptWithStop(t *testing.T) {
 			Delay:       5 * time.Second,
 			MaxDuration: 30 * time.Second,
 		}
-		a := strategy.Start(stop)
-		for a.Next() {
+		i := strategy.Start(stop)
+		for i.Next() {
 			c.Errorf("unexpected attempt")
 		}
-		c.Check(a.WasStopped(), qt.Equals, true)
+		c.Check(i.WasStopped(), qt.Equals, true)
 		close(done)
 	}()
 	assertReceive(c, done, "attempt loop abort")
@@ -65,7 +65,7 @@ type nextCall struct {
 	// t holds the time since the timer was started that
 	// the Next call will be made.
 	t time.Duration
-	// delay holds the length of time that a call made at
+	// delay holds the length of time that i call made at
 	// time t is expected to sleep for.
 	sleep time.Duration
 }
@@ -105,7 +105,7 @@ var strategyTests = []strategyTest{{
 	calls: []nextCall{
 		{0.5e9, 0},
 		// We call Next at well beyond the deadline,
-		// so we get a zero delay, but subsequent events
+		// so we get i zero delay, but subsequent events
 		// resume pace.
 		{2e9, 0},
 		{2.1e9, 0},
@@ -176,22 +176,22 @@ func TestStrategies(t *testing.T) {
 			t0 := time.Now()
 			now := t0
 
-			var a Attempt
-			a.Start(&test.strategy, nil, func() time.Time {
+			var i Iter
+			i.Start(&test.strategy, nil, func() time.Time {
 				return now
 			})
-			for i, call := range test.calls {
+			for j, call := range test.calls {
 				now = t0.Add(call.t)
-				nextt, ok := a.NextTime()
-				expectTerminate := test.terminates && i == len(test.calls)-1
+				nextt, ok := i.NextTime()
+				expectTerminate := test.terminates && j == len(test.calls)-1
 				c.Assert(ok, qt.Equals, !expectTerminate)
 				if ok {
-					c.Logf("call %d at %v - got %v want %v", i, now.Sub(t0), nextt.Sub(t0), call.t)
+					c.Logf("call %d at %v - got %v want %v", j, now.Sub(t0), nextt.Sub(t0), call.t)
 					if nextt.After(now) {
 						now = nextt
 					}
 				} else {
-					c.Logf("call %d - got nothing want %v", i, call.t)
+					c.Logf("call %d - got nothing want %v", j, call.t)
 					if !nextt.IsZero() {
 						c.Fatalf("NextTime should return (time.Time{}, false)")
 					}
@@ -199,7 +199,7 @@ func TestStrategies(t *testing.T) {
 				// Allow for vagaries of floating point arithmetic.
 				c.Check(now.Sub(t0), qt.CmpEquals(cmpopts.EquateApproxTime(20*time.Nanosecond)), call.t+call.sleep)
 				if ok {
-					c.Assert(a.Count(), qt.Equals, i+1)
+					c.Assert(i.Count(), qt.Equals, j+1)
 				}
 			}
 		})
@@ -208,7 +208,7 @@ func TestStrategies(t *testing.T) {
 
 func TestExponentialWithJitter(t *testing.T) {
 	c := qt.New(t)
-	// We use a stochastic test because we don't want
+	// We use i stochastic test because we don't want
 	// to mock rand and have detailed dependence on
 	// the exact way it's used. We run the strategy many
 	// times and note the delays that we found; if the
@@ -236,11 +236,11 @@ func TestExponentialWithJitter(t *testing.T) {
 	now := time.Now()
 	var i int
 	for i = 0; i < 10000; i++ {
-		var a Attempt
-		a.Start(&strategy, nil, func() time.Time {
+		var i Iter
+		i.Start(&strategy, nil, func() time.Time {
 			return now
 		})
-		t, ok := a.NextTime()
+		t, ok := i.NextTime()
 		if !ok {
 			c.Fatalf("no first try")
 		}
@@ -249,7 +249,7 @@ func TestExponentialWithJitter(t *testing.T) {
 		}
 		for try := 0; ; try++ {
 			prevTime := now
-			t, ok := a.NextTime()
+			t, ok := i.NextTime()
 			if !ok || try >= len(tries) {
 				break
 			}
@@ -290,15 +290,74 @@ func noJitter(t testing.TB) {
 	})
 }
 
-func BenchmarkSimple(b *testing.B) {
+func BenchmarkReuseIter(b *testing.B) {
 	strategy := Strategy{
 		Delay:    1,
-		MaxCount: 10,
+		MaxCount: 1,
+	}
+	b.ReportAllocs()
+	var i Iter
+	for j := 0; j < b.N; j++ {
+		for i.Start(&strategy, nil, nil); i.Next(); {
+		}
+	}
+}
+
+func BenchmarkStart(b *testing.B) {
+	strategy := Strategy{
+		Delay:    1,
+		MaxCount: 1,
 	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var a Attempt
-		for a.Start(&strategy, nil, nil); a.Next(); {
+		for i := strategy.Start(nil); i.Next(); {
+		}
+	}
+}
+
+func BenchmarkReuseIterWithStop(b *testing.B) {
+	strategy := Strategy{
+		Delay:    1,
+		MaxCount: 1,
+	}
+	b.ReportAllocs()
+	c := make(chan struct{})
+	var i Iter
+	for j := 0; j < b.N; j++ {
+		for i.Start(&strategy, c, nil); i.Next(); {
+		}
+	}
+}
+
+func BenchmarkStartWithStop(b *testing.B) {
+	strategy := Strategy{
+		Delay:    time.Microsecond,
+		MaxCount: 5,
+	}
+	b.ReportAllocs()
+	c := make(chan struct{})
+	for j := 0; j < b.N; j++ {
+		for i := strategy.Start(c); i.Next(); {
+		}
+	}
+}
+
+func BenchmarkReuseWithStop(b *testing.B) {
+	strategy := Strategy{
+		Delay:    time.Millisecond,
+		MaxCount: 5,
+	}
+	b.ReportAllocs()
+	c := make(chan struct{})
+	var i Iter
+
+	for j := 0; j < b.N; j++ {
+		j := 0
+		for i.Start(&strategy, c, nil); i.Next(); {
+			j++
+		}
+		if j != 5 {
+			b.Fatal("unexpected count", j)
 		}
 	}
 }

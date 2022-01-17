@@ -1,3 +1,26 @@
+// Package retry implements an efficientloop-based retry mechanism
+// that allows the retry policy to be specified independently of the control structure.
+// It supports exponential (with jitter) and linear retry policies.
+//
+// Although syntactically lightweight, it's also flexible - for example,
+// it can be used to run a backoff loop while waiting for other concurrent
+// events, or with mocked-out time.
+//
+// An example:
+//
+//	func getFoo() (*Foo, error) {
+//		var retryStrategy retry.Strategy{
+//			MinDelay: time.Millisecond,
+//			MaxDelay: time.Second,
+//			MaxDuration: time.Minute,
+//		}
+//		for i := retryStrategy.Start(nil); i.Next(); {
+//			if foo, err := doSomething(); err == nil {
+//				return foo, nil
+//			}
+//		}
+//		return foo, fmt.Errorf("too many retries")
+//	}
 package retry
 
 import (
@@ -54,15 +77,13 @@ var jitter = true
 // minDelay [ ".." maxDelay [ "*" factor] ] [ ";" [ maxCount ] [ ";" [ maxDuration ] ]
 
 // Start starts a set of retry attempts using s as
-// a retry strategy and returns an Attempt
+// a retry strategy and returns an Iter
 // that can be used to wait for each attempt in turn.
-//
-// Attempts will
 //
 // Note that an Attempt can be used for multiple
 // sets of retries (but not concurrently).
-func (s *Strategy) Start(stop <-chan struct{}) *Attempt {
-	var a Attempt
+func (s *Strategy) Start(stop <-chan struct{}) *Iter {
+	var a Iter
 	a.Start(s, stop, nil)
 	return &a
 }
@@ -71,8 +92,8 @@ func (s *Strategy) isExponential() bool {
 	return s.MaxDelay > s.Delay || s.Factor > 0
 }
 
-// Attempt represents a particular retry attempt using some retry strategy.
-type Attempt struct {
+// Iter represents a particular retry iteration loop using some strategy.
+type Iter struct {
 	hasMoreCalled bool
 	stopped       bool
 	inProgress    bool
@@ -91,122 +112,123 @@ type Attempt struct {
 	timer *time.Timer
 }
 
-// Start is like Strategy.Start but initializes an existing Attempt
-// value, saving an allocation.
+// Start is like Strategy.Start but initializes an existing Iter
+// value which can save an allocation.
 //
 // It also accepts a function that is used to get the current time.
 // If that's nil, time.Now will be used.
-func (a *Attempt) Start(strategy *Strategy, stop <-chan struct{}, now func() time.Time) {
-	a.strategy = *strategy
-	if a.strategy.isExponential() {
-		if a.strategy.Factor <= 1 {
-			a.strategy.Factor = 2
+func (i *Iter) Start(strategy *Strategy, stop <-chan struct{}, now func() time.Time) {
+	i.strategy = *strategy
+	if i.strategy.isExponential() {
+		if i.strategy.Factor <= 1 {
+			i.strategy.Factor = 2
 		}
-		if a.strategy.Delay <= 0 {
-			a.strategy.Delay = 1
+		if i.strategy.Delay <= 0 {
+			i.strategy.Delay = 1
 		}
-		if a.strategy.MaxDelay <= 0 {
-			a.strategy.MaxDelay = math.MaxInt64
+		if i.strategy.MaxDelay <= 0 {
+			i.strategy.MaxDelay = math.MaxInt64
 		}
 	}
-	if a.strategy.MaxCount == 0 {
-		a.strategy.MaxCount = math.MaxInt
+	if i.strategy.MaxCount == 0 {
+		i.strategy.MaxCount = math.MaxInt
 	}
 	if now == nil {
 		now = time.Now
 	}
-	a.now = now
-	a.start = now()
-	a.tryStart = a.start
-	a.delay = a.strategy.Delay
+	i.now = now
+	i.start = now()
+	i.tryStart = i.start
+	i.delay = i.strategy.Delay
 	// We'll always make at least one attempt.
-	a.hasMoreCalled = true
-	a.inProgress = true
-	a.count = 1
-	a.stop = stop
+	i.hasMoreCalled = true
+	i.inProgress = true
+	i.count = 0
+	i.stop = stop
 }
 
-// WasStopped reports whether the attempt was stopped
+// WasStopped reports whether the iteration was stopped
 // because a value was received on the stop channel.
-func (a *Attempt) WasStopped() bool {
-	return a.stopped
+func (i *Iter) WasStopped() bool {
+	return i.stopped
 }
 
 // Next sleeps until the next attempt is to be made and
 // reports whether there are any more attempts remaining.
-func (a *Attempt) Next() bool {
-	t, ok := a.NextTime()
+func (i *Iter) Next() bool {
+	t, ok := i.NextTime()
 	if !ok {
 		return false
 	}
-	if !a.sleep(t.Sub(a.now())) {
-		a.stopped = true
-		a.inProgress = false
+	if !i.sleep(t.Sub(i.now())) {
+		i.stopped = true
+		i.inProgress = false
 		return false
 	}
 	return true
 }
 
 // NextTime is similar to Next except that it instead returns
-// immediately with time that the next attempt should be made at.
+// immediately with the time that the next attempt should be made.
 // The caller is responsible for actually waiting.
 //
 // This can return a time in the past if the previous attempt
 // lasted longer than its available timeslot.
-func (a *Attempt) NextTime() (time.Time, bool) {
-	if !a.HasMore() {
+func (i *Iter) NextTime() (time.Time, bool) {
+	if !i.HasMore() {
 		return time.Time{}, false
 	}
-	a.hasMoreCalled = false
-	return a.tryStart, true
+	i.count++
+	i.hasMoreCalled = false
+	return i.tryStart, true
 }
 
-// HasMore returns immediately and  whether there are more retry
-// attempts left. If it returns true, then Next will return true
-// unless a value was received on the stop channel, in which case
-// a.WasStopped will return true.
-func (a *Attempt) HasMore() bool {
-	if a.hasMoreCalled {
-		return a.inProgress
+// HasMore returns immediately and reports whether there are more retry
+// attempts left. If it returns true, then Next will return true unless
+// a value was received on the stop channel, in which case a.WasStopped
+// will return true.
+func (i *Iter) HasMore() bool {
+	if i.hasMoreCalled {
+		return i.inProgress
 	}
-	a.inProgress = a.updateNext()
-	a.hasMoreCalled = true
-	return a.inProgress
+	i.inProgress = i.updateNext()
+	i.hasMoreCalled = true
+	return i.inProgress
 }
 
-func (a *Attempt) updateNext() bool {
-	if a.count >= a.strategy.MaxCount {
+func (i *Iter) updateNext() bool {
+	if i.count >= i.strategy.MaxCount {
 		return false
 	}
-	if !a.strategy.isExponential() {
-		a.tryStart = a.tryStart.Add(a.strategy.Delay)
+	if !i.strategy.isExponential() {
+		i.tryStart = i.tryStart.Add(i.strategy.Delay)
 	} else {
-		actualDelay := a.delay
+		actualDelay := i.delay
 		if jitter {
 			actualDelay = randDuration(actualDelay)
 		}
-		a.tryStart = a.tryStart.Add(actualDelay)
-		a.delay = time.Duration(float64(a.delay) * a.strategy.Factor)
-		if a.delay > a.strategy.MaxDelay {
-			a.delay = a.strategy.MaxDelay
+		i.tryStart = i.tryStart.Add(actualDelay)
+		i.delay = time.Duration(float64(i.delay) * i.strategy.Factor)
+		if i.delay > i.strategy.MaxDelay {
+			i.delay = i.strategy.MaxDelay
 		}
 	}
-	if a.strategy.MaxDuration != 0 {
-		now := a.now()
-		if now.Sub(a.start) > a.strategy.MaxDuration || a.tryStart.Sub(a.start) > a.strategy.MaxDuration {
+	if i.strategy.MaxDuration != 0 {
+		now := i.now()
+		if now.Sub(i.start) > i.strategy.MaxDuration || i.tryStart.Sub(i.start) > i.strategy.MaxDuration {
 			return false
 		}
 	}
-	a.count++
 	return true
 }
 
-func (a *Attempt) Count() int {
-	return a.count
+// Count returns the number of iterations so far, starting at 1.
+func (i *Iter) Count() int {
+	return i.count
 }
 
-func (a *Attempt) sleep(d time.Duration) bool {
-	if a.stop == nil {
+func (i *Iter) sleep(d time.Duration) bool {
+	if i.stop == nil {
 		time.Sleep(d)
 		return true
 	}
@@ -214,26 +236,26 @@ func (a *Attempt) sleep(d time.Duration) bool {
 		// We're not going to sleep for any time, so make sure
 		// we respect the stop channel.
 		select {
-		case <-a.stop:
+		case <-i.stop:
 			return false
 		default:
 			return true
 		}
 	}
-	if a.timer == nil {
-		a.timer = time.NewTimer(d)
+	if i.timer == nil {
+		i.timer = time.NewTimer(d)
 	} else {
-		a.timer.Reset(d)
+		i.timer.Reset(d)
 	}
 	select {
-	case <-a.stop:
+	case <-i.stop:
 		// Stop the timer to be sure we can continue to use the timer
-		// if the Attempt is reused.
-		if !a.timer.Stop() {
-			<-a.timer.C
+		// if the Iter is reused.
+		if !i.timer.Stop() {
+			<-i.timer.C
 		}
 		return false
-	case <-a.timer.C:
+	case <-i.timer.C:
 		return true
 	}
 }
