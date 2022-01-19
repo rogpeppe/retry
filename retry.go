@@ -17,7 +17,7 @@ import (
 )
 
 // Strategy represents a retry strategy. This specifies how a set of retries should
-// be made and can be reused for any number of attempts (it's treated as immutable
+// be made and can be reused for any number of loops (it's treated as immutable
 // by this package).
 //
 // If an iteration takes longer than the delay for that iteration, the next
@@ -25,22 +25,26 @@ import (
 // has a delay of 1ms and the first two tries take 1s and 0.5ms respectively,
 // then the second try will start immediately after the first (at 1s), but
 // the third will start at 1.1s.
+//
+// All strategies will loop for at least one iteration. The only time a loop
+// might terminate immediately is when a value is received on
+// the stop channel.
 type Strategy struct {
-	// Delay holds the amount of time between starting each retry
-	// attempt. If Factor is greater than 1 or MaxDelay is greater
+	// Delay holds the amount of time between starting each iteration.
+	// If Factor is greater than 1 or MaxDelay is greater
 	// than Delay, then the maximum delay time will increase
-	// exponentially (modulo jitter) as attempts continue, up to a
+	// exponentially (modulo jitter) as iterations continue, up to a
 	// maximum of MaxDuration if that's non-zero.
 	Delay time.Duration
 
 	// MaxDelay holds the maximum amount of time between
-	// starting each retry attempt. If this is greater than Delay,
-	// the strategy is exponential - the time between attempts
-	// will multiply by Factor on each attempt.
+	// starting each iteration. If this is greater than Delay,
+	// the strategy is exponential - the time between iterations
+	// will multiply by Factor on each iteration.
 	MaxDelay time.Duration
 
 	// Factor holds the exponential factor used when calculating the
-	// next retry attempt. If the strategy is exponential (MaxDelay > Delay),
+	// next iteration delay. If the strategy is exponential (MaxDelay > Delay),
 	// and Factor is <= 1, it will be treated as 2.
 	//
 	// If the initial delay is 0, it will be treated as 1ns before multiplying
@@ -53,18 +57,18 @@ type Strategy struct {
 
 	// Regular specifies that the backoff timing should be adhered
 	// to as closely as possible with no jitter. When this is false,
-	// the actual delay between attempts will be chosen randomly
+	// the actual delay between iterations will be chosen randomly
 	// from the interval (0, d] where d is the delay for that iteration.
 	Regular bool
 
-	// MaxCount limits the total number of attempts that will be made. If it's zero,
-	// the number of attempts is unlimited.
+	// MaxCount limits the total number of iterations. If it's zero,
+	// the count is unlimited.
 	MaxCount int
 
-	// MaxDuration limits the total amount of time taken by all attempts.
-	// An attempt will not be started if the time since Start was called
-	// exceeds MaxDuration.
-	// If MaxDuration is <= 0, there is no time limit.
+	// MaxDuration limits the total amount of time taken by the
+	// whole loop. An iteration will not be started if the time
+	// since Start was called exceeds MaxDuration. If MaxDuration <= 0,
+	// there is no time limit.
 	MaxDuration time.Duration
 }
 
@@ -108,12 +112,13 @@ func (s *Strategy) String() string {
 	return buf.String()
 }
 
-// Start starts a set of retry attempts using s as
-// a retry strategy and returns an Iter
-// that can be used to wait for each attempt in turn.
+// Start starts a retry loop using s as a retry strategy and
+// returns an Iter that can be used to wait for each iteration in turn
+// and is terminated if a value is received on the stop channel.
 //
-// Note that an Attempt can be used for multiple
-// sets of retries (but not concurrently).
+// Note that in general, there will always be at least one iteration
+// regardless of the strategy, but regardless of that, the iteration
+// will terminate immediately if a value is received on the stop channel
 func (s *Strategy) Start(stop <-chan struct{}) *Iter {
 	var a Iter
 	a.Reset(s, stop, nil)
@@ -130,14 +135,14 @@ type Iter struct {
 	stopped       bool
 	inProgress    bool
 	strategy      Strategy
-	// start holds when the current attempts started.
+	// start holds when the current loop started.
 	start time.Time
-	// tryStart holds the time that the next attempt should start.
+	// tryStart holds the time that the next iteration should start.
 	tryStart time.Time
-	// delay holds the current delay between attempt starts.
+	// delay holds the current delay between iterations.
 	// (only used if the strategy is exponential)
 	delay time.Duration
-	// count holds the number of attempts made.
+	// count holds the number of iterations so far.
 	count int
 	now   func() time.Time
 	stop  <-chan struct{}
@@ -175,7 +180,7 @@ func (i *Iter) Reset(strategy *Strategy, stop <-chan struct{}, now func() time.T
 	i.start = now()
 	i.tryStart = i.start
 	i.delay = i.strategy.Delay
-	// We'll always make at least one attempt.
+	// We always want at least one iteration.
 	i.hasMoreCalled = true
 	i.inProgress = true
 	i.count = 0
@@ -188,10 +193,13 @@ func (i *Iter) WasStopped() bool {
 	return i.stopped
 }
 
-// Next sleeps until the next attempt is to be made and
-// reports whether there are any more attempts remaining.
+// Next sleeps until the next iteration is to be made and
+// reports whether there are any more iterations remaining.
+//
+// Other than the first iteration, this won't return true
+// when the next iteration would start after MaxDuration.
 func (i *Iter) Next() bool {
-	t, ok := i.NextTime()
+	t, ok := i.nextTime()
 	if !ok {
 		return false
 	}
@@ -200,28 +208,36 @@ func (i *Iter) Next() bool {
 		i.inProgress = false
 		return false
 	}
+	i.count++
 	return true
 }
 
 // NextTime is similar to Next except that it instead returns
-// immediately with the time that the next attempt should be made.
+// immediately with the time that the next iteration should begin.
 // The caller is responsible for actually waiting.
 //
-// This can return a time in the past if the previous attempt
+// This can return a time in the past if the previous iteration
 // lasted longer than its available timeslot.
 func (i *Iter) NextTime() (time.Time, bool) {
+	t, ok := i.nextTime()
+	if ok {
+		i.count++
+	}
+	return t, ok
+}
+
+func (i *Iter) nextTime() (time.Time, bool) {
 	if !i.HasMore() {
 		return time.Time{}, false
 	}
-	i.count++
 	i.hasMoreCalled = false
 	return i.tryStart, true
 }
 
-// HasMore returns immediately and reports whether there are more retry
-// attempts left. If it returns true, then Next will return true unless
-// a value was received on the stop channel, in which case a.WasStopped
-// will return true.
+// HasMore returns immediately and reports whether there are more
+// iterations remaining. If it returns true, then Next will return true unless
+// a value was received on the stop channel, in which it will return false
+// and a.WasStopped will return true.
 func (i *Iter) HasMore() bool {
 	if i.hasMoreCalled {
 		return i.inProgress
@@ -261,7 +277,8 @@ func (i *Iter) updateNext() bool {
 	return true
 }
 
-// Count returns the number of iterations so far, starting at 1.
+// Count returns the number of iterations so far. Specifically,
+// this returns the number of times that Next or NextTime have returned true.
 func (i *Iter) Count() int {
 	return i.count
 }

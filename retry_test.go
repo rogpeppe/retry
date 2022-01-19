@@ -35,24 +35,81 @@ func TestIterTiming(t *testing.T) {
 	}
 }
 
-func TestIterWithStop(t *testing.T) {
+func TestIterWithStopAlreadyClosed(t *testing.T) {
 	c := qt.New(t)
 	stop := make(chan struct{})
 	close(stop)
-	done := make(chan struct{})
+	strategy := Strategy{
+		Delay:       5 * time.Second,
+		MaxDuration: 30 * time.Second,
+		Regular:     true,
+	}
+	i := strategy.Start(stop)
+	for i.Next() {
+		c.Errorf("unexpected attempt")
+	}
+	c.Check(i.WasStopped(), qt.Equals, true)
+}
+
+func TestIterWithStopNotStopped(t *testing.T) {
+	strategy := Strategy{
+		Delay:       time.Millisecond,
+		MaxDuration: 100 * time.Millisecond,
+		Regular:     true,
+	}
+	t0 := time.Now()
+	for i := strategy.Start(make(chan struct{})); i.Next(); {
+	}
+	duration := time.Since(t0)
+	if duration < strategy.MaxDuration-strategy.Delay {
+		t.Fatalf("loop terminated too early; got %v want %v", duration, strategy.MaxDuration)
+	}
+	if duration > strategy.MaxDuration+500*time.Millisecond {
+		t.Fatalf("loop terminated too late; got %v want %v", duration, strategy.MaxDuration)
+	}
+}
+
+func TestCount(t *testing.T) {
+	c := qt.New(t)
+	strategy := Strategy{
+		Delay:    time.Nanosecond,
+		MaxCount: 2,
+	}
+	i := strategy.Start(nil)
+	c.Assert(i.Count(), qt.Equals, 0)
+	c.Assert(i.Next(), qt.IsTrue)
+	c.Assert(i.Count(), qt.Equals, 1)
+	_, ok := i.NextTime()
+	c.Assert(ok, qt.IsTrue)
+	c.Assert(i.Count(), qt.Equals, 2)
+	c.Assert(i.Next(), qt.IsFalse)
+	c.Assert(i.Count(), qt.Equals, 2)
+}
+
+func TestIterWithStopWhileSleeping(t *testing.T) {
+	c := qt.New(t)
+	stop := make(chan struct{})
 	go func() {
-		strategy := Strategy{
-			Delay:       5 * time.Second,
-			MaxDuration: 30 * time.Second,
-		}
-		i := strategy.Start(stop)
-		for i.Next() {
-			c.Errorf("unexpected attempt")
-		}
-		c.Check(i.WasStopped(), qt.Equals, true)
-		close(done)
+		time.Sleep(200 * time.Millisecond)
+		close(stop)
 	}()
-	assertReceive(c, done, "attempt loop abort")
+	strategy := Strategy{
+		Delay:       5 * time.Second,
+		MaxDuration: 30 * time.Second,
+		Regular:     true,
+	}
+	t0 := time.Now()
+	i := strategy.Start(stop)
+	count := 0
+	for i.Next() {
+		count++
+	}
+	c.Check(i.WasStopped(), qt.Equals, true)
+	c.Check(i.Count(), qt.Equals, 1)
+	c.Check(count, qt.Equals, 1)
+	if d := time.Since(t0); d > 500*time.Millisecond {
+		c.Fatalf("loop didn't stop when stop channel was closed; got %v want %v", d, 200*time.Millisecond)
+	}
 }
 
 type strategyTest struct {
