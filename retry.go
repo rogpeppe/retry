@@ -10,124 +10,9 @@ package retry
 import (
 	"math"
 	"math/rand"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
-
-// Strategy represents a retry strategy. This specifies how a set of retries should
-// be made and can be reused for any number of loops (it's treated as immutable
-// by this package).
-//
-// If an iteration takes longer than the delay for that iteration, the next
-// iteration will be moved accordingly. For example, if the strategy
-// has a delay of 1ms and the first two tries take 1s and 0.5ms respectively,
-// then the second try will start immediately after the first (at 1s), but
-// the third will start at 1.1s.
-//
-// All strategies will loop for at least one iteration. The only time a loop
-// might terminate immediately is when a value is received on
-// the stop channel.
-type Strategy struct {
-	// Delay holds the amount of time between the start of each iteration.
-	// If Factor is greater than 1 or MaxDelay is greater
-	// than Delay, then the maximum delay time will increase
-	// exponentially (modulo jitter) as iterations continue, up to a
-	// maximum of MaxDuration if that's non-zero.
-	Delay time.Duration
-
-	// MaxDelay holds the maximum amount of time between
-	// the start of each iteration. If this is greater than Delay,
-	// the strategy is exponential - the time between iterations
-	// will multiply by Factor on each iteration.
-	MaxDelay time.Duration
-
-	// Factor holds the exponential factor used when calculating the
-	// next iteration delay. If the strategy is exponential (MaxDelay > Delay),
-	// and Factor is <= 1, it will be treated as 2.
-	//
-	// If the initial delay is 0, it will be treated as 1ns before multiplying
-	// for the first time, avoiding an infinite loop.
-	//
-	// The actual delay will be randomized by applying jitter
-	// according to the "Full Jitter" algorithm described in
-	// https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
-	Factor float64
-
-	// Regular specifies that the backoff timing should be adhered
-	// to as closely as possible with no jitter. When this is false,
-	// the actual delay between iterations will be chosen randomly
-	// from the interval (0, d] where d is the delay for that iteration.
-	Regular bool
-
-	// MaxCount limits the total number of iterations. If it's zero,
-	// the count is unlimited.
-	MaxCount int
-
-	// MaxDuration limits the total amount of time taken by the
-	// whole loop. An iteration will not be started if the time
-	// since Start was called exceeds MaxDuration. If MaxDuration <= 0,
-	// there is no time limit.
-	MaxDuration time.Duration
-}
-
-// String returns the strategy in the format:
-//
-// 	~1ms**1.5..30s; 20; 2m
-//
-// The grammar is:
-//
-// 	[ "~" ] minDelay [ [ "**" factor ] ".." maxDelay ] [ "; " [ maxCount ] [ "; " [ maxDuration ] ]
-//
-// TODO implement ParseStrategy to parse the above grammar.
-func (s *Strategy) String() string {
-	var buf strings.Builder
-	if !s.Regular {
-		buf.WriteByte('~')
-	}
-	buf.WriteString(s.Delay.String())
-	if s.MaxDelay > s.Delay {
-		factor := s.Factor
-		if factor <= 1 {
-			factor = 2
-		}
-		if factor != 2 {
-			buf.WriteString("**")
-			buf.WriteString(strconv.FormatFloat(factor, 'g', -1, 64))
-		}
-		buf.WriteString("..")
-		buf.WriteString(s.MaxDelay.String())
-	}
-	if s.MaxCount > 0 || s.MaxDuration > 0 {
-		buf.WriteString("; ")
-		if s.MaxCount > 0 {
-			buf.WriteString(strconv.FormatInt(int64(s.MaxCount), 10))
-		}
-		if s.MaxDuration > 0 {
-			buf.WriteString("; ")
-			buf.WriteString(s.MaxDuration.String())
-		}
-	}
-	return buf.String()
-}
-
-// Start starts a retry loop using s as a retry strategy and
-// returns an Iter that can be used to wait for each iteration in turn
-// and is terminated if a value is received on the stop channel.
-//
-// Note that in general, there will always be at least one iteration
-// regardless of the strategy, but regardless of that, the iteration
-// will terminate immediately if a value is received on the stop channel
-func (s *Strategy) Start(stop <-chan struct{}) *Iter {
-	var a Iter
-	a.Reset(s, stop, nil)
-	return &a
-}
-
-func (s *Strategy) isExponential() bool {
-	return s.MaxDelay > s.Delay || s.Factor > 0
-}
 
 // Iter represents a particular retry iteration loop using some strategy.
 type Iter struct {
@@ -147,6 +32,19 @@ type Iter struct {
 	now   func() time.Time
 	stop  <-chan struct{}
 	timer *time.Timer
+}
+
+// Start starts a retry loop using s as a retry strategy and
+// returns an Iter that can be used to wait for each iteration in turn
+// and is terminated if a value is received on the stop channel.
+//
+// Note that in general, there will always be at least one iteration
+// regardless of the strategy, but regardless of that, the iteration
+// will terminate immediately if a value is received on the stop channel
+func (s *Strategy) Start(stop <-chan struct{}) *Iter {
+	var a Iter
+	a.Reset(s, stop, nil)
+	return &a
 }
 
 // Reset is like Strategy.Start but initializes an existing Iter

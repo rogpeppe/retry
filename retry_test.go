@@ -419,6 +419,136 @@ func TestStrategyString(t *testing.T) {
 	for _, test := range strategyStringTests {
 		c.Run(test.testName, func(c *qt.C) {
 			c.Assert(test.s.String(), qt.Equals, test.want)
+			// Check that we can parse the result.
+			st, err := ParseStrategy(test.s.String())
+			c.Assert(err, qt.IsNil)
+			c.Assert(st, qt.DeepEquals, &test.s)
+		})
+	}
+}
+
+var parseStrategyTests = []struct {
+	testName    string
+	str         string
+	expect      Strategy
+	expectError string
+}{{
+	testName: "SimpleRegular",
+	str:      "1ms",
+	expect: Strategy{
+		Regular: true,
+		Delay:   time.Millisecond,
+	},
+}, {
+	testName: "SimpleWithJitter",
+	str:      "~1ms",
+	expect: Strategy{
+		Delay: time.Millisecond,
+	},
+}, {
+	testName:    "Empty",
+	str:         "",
+	expectError: `no delay found`,
+}, {
+	testName:    "OnlySpace",
+	str:         "   ",
+	expectError: `no delay found`,
+}, {
+	testName: "DelayWithDecimalPoint",
+	str:      ".5s",
+	expect: Strategy{
+		Regular: true,
+		Delay:   500 * time.Millisecond,
+	},
+}, {
+	testName:    "BadDelay",
+	str:         "x",
+	expectError: `invalid delay: time: invalid duration "x"`,
+}, {
+	testName:    "InvalidFactorPrefix",
+	str:         "3ms*",
+	expectError: "invalid exponential factor prefix",
+}, {
+	testName:    "MissingFactor",
+	str:         "3ms**",
+	expectError: "missing exponential factor",
+}, {
+	testName:    "BadFactor",
+	str:         "3ms**x",
+	expectError: `invalid exponential factor: strconv.ParseFloat: parsing "x": invalid syntax`,
+}, {
+	testName: "AllFieldsWithWhiteSpace",
+	str:      "  ~  1ms  **  1.5  ..  30s  ;  20 ;  2m0s  ",
+	expect: Strategy{
+		Delay:       time.Millisecond,
+		MaxDelay:    30 * time.Second,
+		Factor:      1.5,
+		MaxCount:    20,
+		MaxDuration: 2 * time.Minute,
+	},
+}, {
+	testName:    "FactorAtEnd",
+	str:         "1ms**2",
+	expectError: `exponential factor must be followed by ".."`,
+}, {
+	testName:    "FactorWithNoMaxDuration",
+	str:         "1ms**2; 3",
+	expectError: `exponential factor must be followed by ".."`,
+}, {
+	testName:    "MissingMaxDelay",
+	str:         "1ms..",
+	expectError: `missing max delay after ".."`,
+}, {
+	testName:    "BadMaxDelay",
+	str:         "1ms..x",
+	expectError: `invalid max delay: time: invalid duration "x"`,
+}, {
+	testName: "MissingMaxCount",
+	str:      "1ms; ; 10ms",
+	expect: Strategy{
+		Regular:     true,
+		Delay:       time.Millisecond,
+		MaxDuration: 10 * time.Millisecond,
+	},
+}, {
+	testName:    "BadMaxCount",
+	str:         "1ms; x",
+	expectError: `invalid max count: strconv.Atoi: parsing "x": invalid syntax`,
+}, {
+	testName: "SemicolonBeforeEnd",
+	str:      "1ms;",
+	expect: Strategy{
+		Regular: true,
+		Delay:   time.Millisecond,
+	},
+}, {
+	testName: "TwoSemicolonsBeforeEnd",
+	str:      "1ms;;",
+	expect: Strategy{
+		Regular: true,
+		Delay:   time.Millisecond,
+	},
+}, {
+	testName:    "BadMaxDuration",
+	str:         "1ms;;x",
+	expectError: `invalid max duration: time: invalid duration "x"`,
+}, {
+	testName:    "ExtraTextAfterMaxDuration",
+	str:         "1ms;;10ms x",
+	expectError: `unexpected text after strategy`,
+}}
+
+func TestParseStrategy(t *testing.T) {
+	c := qt.New(t)
+	for _, test := range parseStrategyTests {
+		c.Run(test.testName, func(c *qt.C) {
+			st, err := ParseStrategy(test.str)
+			if test.expectError != "" {
+				c.Assert(err, qt.ErrorMatches, test.expectError)
+				return
+			}
+			c.Assert(err, qt.IsNil)
+			c.Assert(st, qt.DeepEquals, &test.expect)
 		})
 	}
 }
