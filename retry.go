@@ -30,7 +30,7 @@ import (
 // might terminate immediately is when a value is received on
 // the stop channel.
 type Strategy struct {
-	// Delay holds the amount of time between starting each iteration.
+	// Delay holds the amount of time between the start of each iteration.
 	// If Factor is greater than 1 or MaxDelay is greater
 	// than Delay, then the maximum delay time will increase
 	// exponentially (modulo jitter) as iterations continue, up to a
@@ -38,7 +38,7 @@ type Strategy struct {
 	Delay time.Duration
 
 	// MaxDelay holds the maximum amount of time between
-	// starting each iteration. If this is greater than Delay,
+	// the start of each iteration. If this is greater than Delay,
 	// the strategy is exponential - the time between iterations
 	// will multiply by Factor on each iteration.
 	MaxDelay time.Duration
@@ -195,9 +195,6 @@ func (i *Iter) WasStopped() bool {
 
 // Next sleeps until the next iteration is to be made and
 // reports whether there are any more iterations remaining.
-//
-// Other than the first iteration, this won't return true
-// when the next iteration would start after MaxDuration.
 func (i *Iter) Next() bool {
 	t, ok := i.nextTime()
 	if !ok {
@@ -214,10 +211,8 @@ func (i *Iter) Next() bool {
 
 // NextTime is similar to Next except that it instead returns
 // immediately with the time that the next iteration should begin.
-// The caller is responsible for actually waiting.
-//
-// This can return a time in the past if the previous iteration
-// lasted longer than its available timeslot.
+// The caller is responsible for actually waiting, and the stop
+// channel is ignored.
 func (i *Iter) NextTime() (time.Time, bool) {
 	t, ok := i.nextTime()
 	if ok {
@@ -236,7 +231,7 @@ func (i *Iter) nextTime() (time.Time, bool) {
 
 // HasMore returns immediately and reports whether there are more
 // iterations remaining. If it returns true, then Next will return true unless
-// a value was received on the stop channel, in which it will return false
+// a value was received on the stop channel, in which case it will return false
 // and a.WasStopped will return true.
 func (i *Iter) HasMore() bool {
 	if i.hasMoreCalled {
