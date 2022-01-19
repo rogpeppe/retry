@@ -344,7 +344,7 @@ var strategyStringTests = []struct {
 		MaxCount:    20,
 		MaxDuration: 2 * time.Minute,
 	},
-	want: "~1ms**1.5..30s; 20; 2m0s",
+	want: "delay=1ms maxdelay=30s factor=1.5 maxcount=20 maxduration=2m0s",
 }, {
 	testName: "AllFieldsRegular",
 	s: Strategy{
@@ -355,7 +355,7 @@ var strategyStringTests = []struct {
 		MaxCount:    20,
 		MaxDuration: 2 * time.Minute,
 	},
-	want: "1ms**1.5..30s; 20; 2m0s",
+	want: "delay=1ms maxdelay=30s factor=1.5 regular=true maxcount=20 maxduration=2m0s",
 }, {
 	testName: "NoMaxCount",
 	s: Strategy{
@@ -365,7 +365,7 @@ var strategyStringTests = []struct {
 		Factor:      1.5,
 		MaxDuration: 2 * time.Minute,
 	},
-	want: "1ms**1.5..30s; ; 2m0s",
+	want: "delay=1ms maxdelay=30s factor=1.5 regular=true maxduration=2m0s",
 }, {
 	testName: "NoMaxDuration",
 	s: Strategy{
@@ -375,7 +375,7 @@ var strategyStringTests = []struct {
 		Factor:   1.5,
 		MaxCount: 20,
 	},
-	want: "1ms**1.5..30s; 20",
+	want: "delay=1ms maxdelay=30s factor=1.5 regular=true maxcount=20",
 }, {
 	testName: "NoMax",
 	s: Strategy{
@@ -384,44 +384,46 @@ var strategyStringTests = []struct {
 		MaxDelay: 30 * time.Second,
 		Factor:   1.5,
 	},
-	want: "1ms**1.5..30s",
+	want: "delay=1ms maxdelay=30s factor=1.5 regular=true",
 }, {
 	testName: "DefaultFactor",
 	s: Strategy{
 		Delay:    time.Millisecond,
 		MaxDelay: 30 * time.Second,
 	},
-	want: "~1ms..30s",
+	want: "delay=1ms maxdelay=30s",
 }, {
 	testName: "Factor2",
 	s: Strategy{
 		Delay:    time.Millisecond,
 		MaxDelay: 30 * time.Second,
+		Factor:   2,
 	},
-	want: "~1ms..30s",
+	want: "delay=1ms maxdelay=30s factor=2",
 }, {
 	testName: "NonExponential",
 	s: Strategy{
 		Delay: time.Millisecond,
 	},
-	want: "~1ms",
+	want: "delay=1ms",
 }, {
 	testName: "NonExponentialRegular",
 	s: Strategy{
 		Delay:   time.Millisecond,
 		Regular: true,
 	},
-	want: "1ms",
+	want: "delay=1ms regular=true",
 }}
 
 func TestStrategyString(t *testing.T) {
 	c := qt.New(t)
 	for _, test := range strategyStringTests {
 		c.Run(test.testName, func(c *qt.C) {
-			c.Assert(test.s.String(), qt.Equals, test.want)
+			s := test.s.String()
+			c.Assert(s, qt.Equals, test.want)
 			// Check that we can parse the result.
-			st, err := ParseStrategy(test.s.String())
-			c.Assert(err, qt.IsNil)
+			st, err := ParseStrategy(s)
+			c.Assert(err, qt.IsNil, qt.Commentf("string: %q", s))
 			c.Assert(st, qt.DeepEquals, &test.s)
 		})
 	}
@@ -434,108 +436,92 @@ var parseStrategyTests = []struct {
 	expectError string
 }{{
 	testName: "SimpleRegular",
-	str:      "1ms",
+	str:      "delay=1ms regular=true",
 	expect: Strategy{
 		Regular: true,
 		Delay:   time.Millisecond,
 	},
 }, {
 	testName: "SimpleWithJitter",
-	str:      "~1ms",
+	str:      "delay=1ms",
 	expect: Strategy{
 		Delay: time.Millisecond,
 	},
 }, {
 	testName:    "Empty",
 	str:         "",
-	expectError: `no delay found`,
+	expectError: `no delay field found`,
 }, {
 	testName:    "OnlySpace",
 	str:         "   ",
-	expectError: `no delay found`,
+	expectError: `no delay field found`,
+}, {
+	testName:    "NoEquals",
+	str:         "delay",
+	expectError: `no = found after field`,
 }, {
 	testName: "DelayWithDecimalPoint",
-	str:      ".5s",
+	str:      "delay=.5s",
 	expect: Strategy{
-		Regular: true,
-		Delay:   500 * time.Millisecond,
+		Delay: 500 * time.Millisecond,
 	},
 }, {
-	testName:    "BadDelay",
-	str:         "x",
-	expectError: `invalid delay: time: invalid duration "x"`,
+	testName:    "SpaceAroundEqual",
+	str:         "delay = 1s",
+	expectError: `no = found after field`,
 }, {
-	testName:    "InvalidFactorPrefix",
-	str:         "3ms*",
-	expectError: "invalid exponential factor prefix",
+	testName: "ExplicitFalseRegular",
+	str:      "delay=1s regular=false",
+	expect: Strategy{
+		Delay: time.Second,
+	},
+}, {
+	testName:    "BadRegular",
+	str:         "delay=1s regular=0",
+	expectError: `cannot parse field  'regular': invalid boolean value '0'`,
+}, {
+	testName:    "RepeatedField",
+	str:         "delay=1s delay=2s",
+	expectError: `repeated field 'delay'`,
+}, {
+	testName:    "BadDelay",
+	str:         "delay=x",
+	expectError: `cannot parse field  'delay': time: invalid duration "x"`,
 }, {
 	testName:    "MissingFactor",
-	str:         "3ms**",
-	expectError: "missing exponential factor",
+	str:         "factor=",
+	expectError: `no value found for field 'factor'`,
 }, {
 	testName:    "BadFactor",
-	str:         "3ms**x",
-	expectError: `invalid exponential factor: strconv.ParseFloat: parsing "x": invalid syntax`,
+	str:         "factor=x",
+	expectError: `cannot parse field  'factor': strconv.ParseFloat: parsing "x": invalid syntax`,
 }, {
 	testName: "AllFieldsWithWhiteSpace",
-	str:      "  ~  1ms  **  1.5  ..  30s  ;  20 ;  2m0s  ",
+	str:      "   delay=1ms    maxdelay=30s   regular=true   factor=1.5   maxcount=20  maxduration=2m   ",
 	expect: Strategy{
 		Delay:       time.Millisecond,
 		MaxDelay:    30 * time.Second,
+		Regular:     true,
 		Factor:      1.5,
 		MaxCount:    20,
 		MaxDuration: 2 * time.Minute,
 	},
 }, {
-	testName:    "FactorAtEnd",
-	str:         "1ms**2",
-	expectError: `exponential factor must be followed by ".."`,
-}, {
-	testName:    "FactorWithNoMaxDuration",
-	str:         "1ms**2; 3",
-	expectError: `exponential factor must be followed by ".."`,
-}, {
-	testName:    "MissingMaxDelay",
-	str:         "1ms..",
-	expectError: `missing max delay after ".."`,
-}, {
 	testName:    "BadMaxDelay",
-	str:         "1ms..x",
-	expectError: `invalid max delay: time: invalid duration "x"`,
-}, {
-	testName: "MissingMaxCount",
-	str:      "1ms; ; 10ms",
-	expect: Strategy{
-		Regular:     true,
-		Delay:       time.Millisecond,
-		MaxDuration: 10 * time.Millisecond,
-	},
+	str:         "maxdelay=x",
+	expectError: `cannot parse field  'maxdelay': time: invalid duration "x"`,
 }, {
 	testName:    "BadMaxCount",
-	str:         "1ms; x",
-	expectError: `invalid max count: strconv.Atoi: parsing "x": invalid syntax`,
+	str:         "maxcount=x",
+	expectError: `cannot parse field  'maxcount': strconv.Atoi: parsing "x": invalid syntax`,
 }, {
-	testName: "SemicolonBeforeEnd",
-	str:      "1ms;",
-	expect: Strategy{
-		Regular: true,
-		Delay:   time.Millisecond,
-	},
-}, {
-	testName: "TwoSemicolonsBeforeEnd",
-	str:      "1ms;;",
-	expect: Strategy{
-		Regular: true,
-		Delay:   time.Millisecond,
-	},
+	testName:    "UnknownField",
+	str:         "foo=bar",
+	expectError: `unknown field 'foo'`,
 }, {
 	testName:    "BadMaxDuration",
-	str:         "1ms;;x",
-	expectError: `invalid max duration: time: invalid duration "x"`,
-}, {
-	testName:    "ExtraTextAfterMaxDuration",
-	str:         "1ms;;10ms x",
-	expectError: `unexpected text after strategy`,
+	str:         "maxduration=x",
+	expectError: `cannot parse field  'maxduration': time: invalid duration "x"`,
 }}
 
 func TestParseStrategy(t *testing.T) {
