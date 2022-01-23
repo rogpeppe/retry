@@ -16,7 +16,6 @@ import (
 
 // Iter represents a particular retry iteration loop using some strategy.
 type Iter struct {
-	stopped  bool
 	strategy Strategy
 	// start holds when the current loop started.
 	start time.Time
@@ -26,9 +25,11 @@ type Iter struct {
 	// (only used if the strategy is exponential)
 	delay time.Duration
 	// count holds the number of iterations so far.
-	count int
-	now   func() time.Time
-	timer *time.Timer
+	count      int
+	now        func() time.Time
+	timer      *time.Timer
+	stopped    bool
+	inProgress bool
 }
 
 // Start starts a retry loop using s as a retry strategy and
@@ -72,6 +73,8 @@ func (i *Iter) Reset(strategy *Strategy, now func() time.Time) {
 	i.start = now()
 	i.delay = i.strategy.Delay
 	i.tryStart = i.start
+	i.stopped = false
+	i.inProgress = true
 	i.count = 1
 }
 
@@ -110,10 +113,31 @@ func (i *Iter) NextTime() (time.Time, bool) {
 	return t, ok
 }
 
+// TryTime returns the time that the current try iteration should be
+// made at, if there should be one. If iteration has finished, it
+// returns (time.Time{}, false).
+//
+// The returned time can be in the past (after Start or Reset or Next
+// have been called) or in the future (after NextTime has been called,
+// TryTime returns the same values that NextTime returned).
+//
+// Calling TryTime repeatedly will return the same values until
+// Next or NextTime or Reset have been called.
+func (i *Iter) TryTime() (time.Time, bool) {
+	return i.tryStart, i.inProgress
+}
+
+// StartTime returns the time that the
+// iterator was created or last reset.
+func (i *Iter) StartTime() time.Time {
+	return i.start
+}
+
 func (i *Iter) nextTime() (time.Time, bool) {
 	if i.updateNext() {
 		return i.tryStart, true
 	}
+	i.inProgress = false
 	return time.Time{}, false
 }
 
@@ -122,14 +146,14 @@ func (i *Iter) updateNext() bool {
 		return false
 	}
 	var actualDelay time.Duration
-	if !i.strategy.isExponential() {
-		actualDelay = i.strategy.Delay
-	} else {
+	if i.strategy.isExponential() {
 		actualDelay = i.delay
 		i.delay = time.Duration(float64(i.delay) * i.strategy.Factor)
 		if i.delay > i.strategy.MaxDelay {
 			i.delay = i.strategy.MaxDelay
 		}
+	} else {
+		actualDelay = i.strategy.Delay
 	}
 	if !i.strategy.Regular {
 		actualDelay = randDuration(actualDelay)

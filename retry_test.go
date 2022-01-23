@@ -592,7 +592,7 @@ func BenchmarkStartWithStop(b *testing.B) {
 
 func BenchmarkReuseWithStop(b *testing.B) {
 	strategy := Strategy{
-		Delay:    time.Millisecond,
+		Delay:    time.Microsecond,
 		MaxCount: 5,
 	}
 	b.ReportAllocs()
@@ -601,8 +601,11 @@ func BenchmarkReuseWithStop(b *testing.B) {
 
 	for j := 0; j < b.N; j++ {
 		j := 0
-		for i.Reset(&strategy, nil); i.Next(c); {
+		for i.Reset(&strategy, nil); ; {
 			j++
+			if !i.Next(c) {
+				break
+			}
 		}
 		if j != 5 {
 			b.Fatal("unexpected count", j)
