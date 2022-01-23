@@ -16,10 +16,8 @@ import (
 
 // Iter represents a particular retry iteration loop using some strategy.
 type Iter struct {
-	hasMoreCalled bool
-	stopped       bool
-	inProgress    bool
-	strategy      Strategy
+	stopped  bool
+	strategy Strategy
 	// start holds when the current loop started.
 	start time.Time
 	// tryStart holds the time that the next iteration should start.
@@ -30,32 +28,28 @@ type Iter struct {
 	// count holds the number of iterations so far.
 	count int
 	now   func() time.Time
-	stop  <-chan struct{}
 	timer *time.Timer
 }
 
 // Start starts a retry loop using s as a retry strategy and
-// returns an Iter that can be used to wait for each iteration in turn
-// and is terminated if a value is received on the stop channel.
-//
-// Note that in general, there will always be at least one iteration
-// regardless of the strategy, but regardless of that, the iteration
-// will terminate immediately if a value is received on the stop channel
-func (s *Strategy) Start(stop <-chan struct{}) *Iter {
+// returns an Iter that can be used to wait for each retry
+// in turn. Note: the first try should be made immediately
+// after calling Start without calling Next.
+func (s *Strategy) Start() *Iter {
 	var a Iter
-	a.Reset(s, stop, nil)
+	a.Reset(s, nil)
 	return &a
 }
 
 // Reset is like Strategy.Start but initializes an existing Iter
 // value which can save the allocation of the underlying
-// time.Timer used when the stop channel is non-nil.
+// time.Timer used when Next is called with a non-nil stop channel.
 //
 // It also accepts a function that is used to get the current time.
 // If that's nil, time.Now will be used.
 //
 // It's OK to call this on the zero Iter value.
-func (i *Iter) Reset(strategy *Strategy, stop <-chan struct{}, now func() time.Time) {
+func (i *Iter) Reset(strategy *Strategy, now func() time.Time) {
 	i.strategy = *strategy
 	if i.strategy.isExponential() {
 		if i.strategy.Factor <= 1 {
@@ -76,31 +70,29 @@ func (i *Iter) Reset(strategy *Strategy, stop <-chan struct{}, now func() time.T
 	}
 	i.now = now
 	i.start = now()
-	i.tryStart = i.start
 	i.delay = i.strategy.Delay
-	// We always want at least one iteration.
-	i.hasMoreCalled = true
-	i.inProgress = true
-	i.count = 0
-	i.stop = stop
+	i.tryStart = i.start
+	i.count = 1
 }
 
 // WasStopped reports whether the iteration was stopped
-// because a value was received on the stop channel.
+// because a value was received on a stop channel passed to Next
 func (i *Iter) WasStopped() bool {
 	return i.stopped
 }
 
 // Next sleeps until the next iteration is to be made and
 // reports whether there are any more iterations remaining.
-func (i *Iter) Next() bool {
+//
+// If a value is received on the stop channel, it immediately
+// stops waiting for the next iteration and returns false.
+func (i *Iter) Next(stop <-chan struct{}) bool {
 	t, ok := i.nextTime()
 	if !ok {
 		return false
 	}
-	if !i.sleep(t.Sub(i.now())) {
+	if !i.sleep(stop, t.Sub(i.now())) {
 		i.stopped = true
-		i.inProgress = false
 		return false
 	}
 	i.count++
@@ -109,8 +101,7 @@ func (i *Iter) Next() bool {
 
 // NextTime is similar to Next except that it instead returns
 // immediately with the time that the next iteration should begin.
-// The caller is responsible for actually waiting, and the stop
-// channel is ignored.
+// The caller is responsible for actually waiting until that time.
 func (i *Iter) NextTime() (time.Time, bool) {
 	t, ok := i.nextTime()
 	if ok {
@@ -120,24 +111,10 @@ func (i *Iter) NextTime() (time.Time, bool) {
 }
 
 func (i *Iter) nextTime() (time.Time, bool) {
-	if !i.HasMore() {
-		return time.Time{}, false
+	if i.updateNext() {
+		return i.tryStart, true
 	}
-	i.hasMoreCalled = false
-	return i.tryStart, true
-}
-
-// HasMore returns immediately and reports whether there are more
-// iterations remaining. If it returns true, then Next will return true unless
-// a value was received on the stop channel, in which case it will return false
-// and a.WasStopped will return true.
-func (i *Iter) HasMore() bool {
-	if i.hasMoreCalled {
-		return i.inProgress
-	}
-	i.inProgress = i.updateNext()
-	i.hasMoreCalled = true
-	return i.inProgress
+	return time.Time{}, false
 }
 
 func (i *Iter) updateNext() bool {
@@ -176,8 +153,8 @@ func (i *Iter) Count() int {
 	return i.count
 }
 
-func (i *Iter) sleep(d time.Duration) bool {
-	if i.stop == nil {
+func (i *Iter) sleep(stop <-chan struct{}, d time.Duration) bool {
+	if stop == nil {
 		time.Sleep(d)
 		return true
 	}
@@ -185,7 +162,7 @@ func (i *Iter) sleep(d time.Duration) bool {
 		// We're not going to sleep for any time, so make sure
 		// we respect the stop channel.
 		select {
-		case <-i.stop:
+		case <-stop:
 			return false
 		default:
 			return true
@@ -197,7 +174,7 @@ func (i *Iter) sleep(d time.Duration) bool {
 		i.timer.Reset(d)
 	}
 	select {
-	case <-i.stop:
+	case <-stop:
 		// Stop the timer to be sure we can continue to use the timer
 		// if the Iter is reused.
 		if !i.timer.Stop() {

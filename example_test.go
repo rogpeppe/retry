@@ -30,17 +30,16 @@ var retryStrategy = retry.Strategy{
 
 // getFooWithRetry demonstrates a retry loop.
 func getFooWithRetry() (*Foo, error) {
-	for i := retryStrategy.Start(nil); i.Next(); {
+	for i := retryStrategy.Start(); ; {
 		log.Printf("getting foo")
 		foo, err := getFoo()
 		if err == nil {
 			return foo, nil
 		}
-		if !i.HasMore() {
+		if !i.Next(nil) {
 			return nil, fmt.Errorf("error getting foo after %d tries: %v", i.Count(), err)
 		}
 	}
-	panic("unreachable")
 }
 
 func getFoo() (*Foo, error) {
