@@ -18,9 +18,12 @@ func TestIterTiming(t *testing.T) {
 	want := []time.Duration{0, 0.1e9, 0.2e9, 0.2e9}
 	got := make([]time.Duration, 0, len(want)) // avoid allocation when testing timing
 	t0 := time.Now()
-	i := testIter.Start(nil)
-	for i.Next() {
+	i := testIter.Start()
+	for {
 		got = append(got, time.Now().Sub(t0))
+		if !i.Next(nil) {
+			break
+		}
 	}
 	got = append(got, time.Now().Sub(t0))
 	c.Assert(i.WasStopped(), qt.Equals, false)
@@ -44,9 +47,9 @@ func TestIterWithStopAlreadyClosed(t *testing.T) {
 		MaxDuration: 30 * time.Second,
 		Regular:     true,
 	}
-	i := strategy.Start(stop)
-	for i.Next() {
-		c.Errorf("unexpected attempt")
+	i := strategy.Start()
+	if i.Next(stop) {
+		c.Fatal("unexpected attempt")
 	}
 	c.Check(i.WasStopped(), qt.Equals, true)
 }
@@ -58,7 +61,8 @@ func TestIterWithStopNotStopped(t *testing.T) {
 		Regular:     true,
 	}
 	t0 := time.Now()
-	for i := strategy.Start(make(chan struct{})); i.Next(); {
+	stop := make(chan struct{})
+	for i := strategy.Start(); i.Next(stop); {
 	}
 	duration := time.Since(t0)
 	if duration < strategy.MaxDuration-strategy.Delay {
@@ -75,14 +79,12 @@ func TestCount(t *testing.T) {
 		Delay:    time.Nanosecond,
 		MaxCount: 2,
 	}
-	i := strategy.Start(nil)
-	c.Assert(i.Count(), qt.Equals, 0)
-	c.Assert(i.Next(), qt.IsTrue)
+	i := strategy.Start()
 	c.Assert(i.Count(), qt.Equals, 1)
-	_, ok := i.NextTime()
-	c.Assert(ok, qt.IsTrue)
+	c.Assert(i.Next(nil), qt.IsTrue)
 	c.Assert(i.Count(), qt.Equals, 2)
-	c.Assert(i.Next(), qt.IsFalse)
+	_, ok := i.NextTime()
+	c.Assert(ok, qt.IsFalse)
 	c.Assert(i.Count(), qt.Equals, 2)
 }
 
@@ -99,10 +101,13 @@ func TestIterWithStopWhileSleeping(t *testing.T) {
 		Regular:     true,
 	}
 	t0 := time.Now()
-	i := strategy.Start(stop)
+	i := strategy.Start()
 	count := 0
-	for i.Next() {
+	for {
 		count++
+		if !i.Next(stop) {
+			break
+		}
 	}
 	c.Check(i.WasStopped(), qt.Equals, true)
 	c.Check(i.Count(), qt.Equals, 1)
@@ -135,7 +140,6 @@ var strategyTests = []strategyTest{{
 		Delay:       0.1e9,
 	},
 	calls: []nextCall{
-		{0, 0},
 		{0, 0.1e9},
 		{0.1e9, 0.1e9},
 		{0.2e9, 0},
@@ -148,7 +152,6 @@ var strategyTests = []strategyTest{{
 		MaxDuration: 2.5e9,
 	},
 	calls: []nextCall{
-		{0.5e9, 0},
 		{0.5e9, 0.5e9},
 		{1.1e9, 0.9e9},
 		{2.2e9, 0},
@@ -161,7 +164,6 @@ var strategyTests = []strategyTest{{
 		Delay:       1e9,
 	},
 	calls: []nextCall{
-		{0.5e9, 0},
 		// We call Next at well beyond the deadline,
 		// so we get i zero delay, but subsequent events
 		// resume pace.
@@ -177,7 +179,6 @@ var strategyTests = []strategyTest{{
 		Factor: 2,
 	},
 	calls: []nextCall{
-		{0, 0},
 		{0.1e9, 0.9e9},
 		{1e9, 2e9},
 		{3e9, 4e9},
@@ -190,7 +191,6 @@ var strategyTests = []strategyTest{{
 		Factor: 0.9,
 	},
 	calls: []nextCall{
-		{0, 0},
 		{0.1e9, 0.9e9},
 		{1e9, 2e9},
 		{3e9, 4e9},
@@ -204,7 +204,6 @@ var strategyTests = []strategyTest{{
 		MaxDuration: 5 * time.Second,
 	},
 	calls: []nextCall{
-		{0, 0},
 		{0.1e9, 0.9e9},
 		{1e9, 2e9},
 		{3e9, 0},
@@ -218,7 +217,6 @@ var strategyTests = []strategyTest{{
 		Factor:   2,
 	},
 	calls: []nextCall{
-		{0, 0},
 		{0.1e9, 0.9e9},
 		{1e9, 0},
 	},
@@ -233,7 +231,7 @@ func TestStrategies(t *testing.T) {
 			now := t0
 			test.strategy.Regular = true
 			var i Iter
-			i.Reset(&test.strategy, nil, func() time.Time {
+			i.Reset(&test.strategy, func() time.Time {
 				return now
 			})
 			for j, call := range test.calls {
@@ -255,7 +253,7 @@ func TestStrategies(t *testing.T) {
 				// Allow for vagaries of floating point arithmetic.
 				c.Check(now.Sub(t0), qt.CmpEquals(cmpopts.EquateApproxTime(20*time.Nanosecond)), call.t+call.sleep)
 				if ok {
-					c.Assert(i.Count(), qt.Equals, j+1)
+					c.Assert(i.Count(), qt.Equals, j+2)
 				}
 			}
 		})
@@ -293,16 +291,9 @@ func TestExponentialWithJitter(t *testing.T) {
 	var i int
 	for i = 0; i < 10000; i++ {
 		var i Iter
-		i.Reset(&strategy, nil, func() time.Time {
+		i.Reset(&strategy, func() time.Time {
 			return now
 		})
-		t, ok := i.NextTime()
-		if !ok {
-			c.Fatalf("no first try")
-		}
-		if !t.Equal(now) {
-			c.Fatalf("first try was not immediate")
-		}
 		for try := 0; ; try++ {
 			prevTime := now
 			t, ok := i.NextTime()
@@ -555,7 +546,7 @@ func BenchmarkReuseIter(b *testing.B) {
 	b.ReportAllocs()
 	var i Iter
 	for j := 0; j < b.N; j++ {
-		for i.Reset(&strategy, nil, nil); i.Next(); {
+		for i.Reset(&strategy, nil); i.Next(nil); {
 		}
 	}
 }
@@ -567,7 +558,7 @@ func BenchmarkStart(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		for i := strategy.Start(nil); i.Next(); {
+		for i := strategy.Start(); i.Next(nil); {
 		}
 	}
 }
@@ -581,7 +572,7 @@ func BenchmarkReuseIterWithStop(b *testing.B) {
 	c := make(chan struct{})
 	var i Iter
 	for j := 0; j < b.N; j++ {
-		for i.Reset(&strategy, c, nil); i.Next(); {
+		for i.Reset(&strategy, nil); i.Next(c); {
 		}
 	}
 }
@@ -594,7 +585,7 @@ func BenchmarkStartWithStop(b *testing.B) {
 	b.ReportAllocs()
 	c := make(chan struct{})
 	for j := 0; j < b.N; j++ {
-		for i := strategy.Start(c); i.Next(); {
+		for i := strategy.Start(); i.Next(c); {
 		}
 	}
 }
@@ -610,7 +601,7 @@ func BenchmarkReuseWithStop(b *testing.B) {
 
 	for j := 0; j < b.N; j++ {
 		j := 0
-		for i.Reset(&strategy, c, nil); i.Next(); {
+		for i.Reset(&strategy, nil); i.Next(c); {
 			j++
 		}
 		if j != 5 {
