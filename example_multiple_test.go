@@ -1,4 +1,3 @@
-
 package retry_test
 
 import (
@@ -21,7 +20,7 @@ func Example_multiple() {
 	for i := 0; i < 5; i++ {
 		h.Push(retryItem{
 			name: fmt.Sprintf("item%d", i),
-			iter: retryStrategy.Start(),
+			iter: multipleStrategy.Start(),
 		})
 	}
 	for {
