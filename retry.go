@@ -78,8 +78,8 @@ func (i *Iter) Reset(strategy *Strategy, now func() time.Time) {
 	i.count = 1
 }
 
-// WasStopped reports whether the iteration was stopped
-// because a value was received on a stop channel passed to Next
+// WasStopped reports whether the most recent call to Next
+// was stopped because a value was received on its stop channel.
 func (i *Iter) WasStopped() bool {
 	return i.stopped
 }
@@ -89,7 +89,9 @@ func (i *Iter) WasStopped() bool {
 //
 // If a value is received on the stop channel, it immediately
 // stops waiting for the next iteration and returns false.
+// i.WasStopped can be called to determine if that happened.
 func (i *Iter) Next(stop <-chan struct{}) bool {
+	i.stopped = false
 	t, ok := i.nextTime()
 	if !ok {
 		return false
@@ -124,7 +126,10 @@ func (i *Iter) NextTime() (time.Time, bool) {
 // Calling TryTime repeatedly will return the same values until
 // Next or NextTime or Reset have been called.
 func (i *Iter) TryTime() (time.Time, bool) {
-	return i.tryStart, i.inProgress
+	if i.inProgress {
+		return i.tryStart, true
+	}
+	return time.Time{}, false
 }
 
 // StartTime returns the time that the

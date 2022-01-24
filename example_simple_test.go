@@ -11,7 +11,7 @@ import (
 
 type Foo struct{}
 
-func Example() {
+func Example_simple() {
 	log.SetFlags(log.Lmicroseconds)
 	_, err := getFooWithRetry()
 	if err != nil {

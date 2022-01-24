@@ -54,6 +54,23 @@ func TestIterWithStopAlreadyClosed(t *testing.T) {
 	c.Check(i.WasStopped(), qt.Equals, true)
 }
 
+func TestIterStopTwice(t *testing.T) {
+	c := qt.New(t)
+	strategy := Strategy{
+		Delay:   time.Millisecond,
+		Regular: true,
+	}
+	i := strategy.Start()
+	stop := make(chan struct{})
+	close(stop)
+	c.Assert(i.Next(stop), qt.IsFalse)
+	c.Assert(i.WasStopped(), qt.IsTrue)
+
+	// WasStopped isn't persistent - it's reset each time Next is called.
+	c.Assert(i.Next(nil), qt.IsTrue)
+	c.Assert(i.WasStopped(), qt.IsFalse)
+}
+
 func TestIterWithStopNotStopped(t *testing.T) {
 	strategy := Strategy{
 		Delay:       time.Millisecond,
@@ -234,11 +251,20 @@ func TestStrategies(t *testing.T) {
 			i.Reset(&test.strategy, func() time.Time {
 				return now
 			})
+			// Initially, TryTime should return when Start or Reset
+			// was called.
+			nextt, ok := i.TryTime()
+			c.Assert(nextt, qt.DeepEquals, t0)
+			c.Assert(ok, qt.IsTrue)
 			for j, call := range test.calls {
 				now = t0.Add(call.t)
 				nextt, ok := i.NextTime()
 				expectTerminate := test.terminates && j == len(test.calls)-1
 				c.Assert(ok, qt.Equals, !expectTerminate)
+				// TryTime should always return the same as NextTime.
+				nextt1, ok1 := i.TryTime()
+				c.Assert(nextt1, qt.DeepEquals, nextt)
+				c.Assert(ok1, qt.Equals, ok)
 				if ok {
 					c.Logf("call %d at %v - got %v want %v", j, now.Sub(t0), nextt.Sub(now), call.sleep)
 					if nextt.After(now) {
@@ -256,6 +282,7 @@ func TestStrategies(t *testing.T) {
 					c.Assert(i.Count(), qt.Equals, j+2)
 				}
 			}
+			c.Assert(i.StartTime(), qt.DeepEquals, t0)
 		})
 	}
 }
