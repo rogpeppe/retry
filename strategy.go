@@ -27,7 +27,7 @@ type Strategy struct {
 	// If Factor is greater than 1 or MaxDelay is greater
 	// than Delay, then the maximum delay time will increase
 	// exponentially (modulo jitter) as iterations continue, up to a
-	// maximum of MaxDuration if that's non-zero.
+	// maximum of MaxDelay if that's non-zero.
 	Delay time.Duration
 
 	// MaxDelay holds the maximum amount of time between
