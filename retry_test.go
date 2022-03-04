@@ -238,6 +238,25 @@ var strategyTests = []strategyTest{{
 		{1e9, 0},
 	},
 	terminates: true,
+}, {
+	testName: "ZeroStrategy",
+	strategy: Strategy{},
+	calls: []nextCall{
+		{0, 0},
+		{0.1e9, 0},
+		{0.1e9, 0},
+		{0.2e9, 0},
+	},
+	terminates: false,
+}, {
+	testName: "SingleAttempt",
+	strategy: Strategy{
+		MaxCount: 1,
+	},
+	calls: []nextCall{
+		{0, 0},
+	},
+	terminates: true,
 }}
 
 func TestStrategies(t *testing.T) {
