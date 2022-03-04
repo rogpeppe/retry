@@ -19,9 +19,8 @@ import (
 // then the second try will start immediately after the first (at 1s), but
 // the third will start at 1.1s.
 //
-// All strategies will loop for at least one iteration. The only time a loop
-// might terminate immediately is when a value is received on
-// the stop channel.
+// Note that the zero value for Strategy is equivalent to the infinite loop:
+// it will iterate endlessly with no delay.
 type Strategy struct {
 	// Delay holds the amount of time between the start of each iteration.
 	// If Factor is greater than 1 or MaxDelay is greater
